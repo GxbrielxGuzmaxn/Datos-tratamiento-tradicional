@@ -25,7 +25,9 @@
   th { position:sticky; top:0; background:#fafafa; cursor:pointer; user-select:none; }
   th .arrow { color:var(--muted); font-size:.75rem; }
   tr.filters th { cursor:default; padding:4px 8px; }
-  tr.filters input { width:100%; min-width:80px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:.8rem; }
+  tr.filters .filtro { display:flex; gap:4px; }
+  tr.filters select { padding:4px 2px; font-size:.8rem; border-radius:6px; width:auto; }
+  tr.filters input { width:100%; min-width:70px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:.8rem; }
   tbody tr:hover { background:#f0fdfa; }
   td.num { text-align:right; font-variant-numeric: tabular-nums; }
   .footer { display:flex; justify-content:space-between; align-items:center; margin-top:12px; color:var(--muted); font-size:.9rem; flex-wrap:wrap; gap:10px; }
@@ -103,20 +105,68 @@ function construirEncabezado() {
     };
     tr1.appendChild(th);
     const thf = document.createElement("th");
+    const caja = document.createElement("div"); caja.className = "filtro";
+    const sel = document.createElement("select");
+    OPERADORES.forEach(([valor, etiqueta, titulo]) => {
+      const o = document.createElement("option");
+      o.value = valor; o.textContent = etiqueta; o.title = titulo;
+      sel.appendChild(o);
+    });
+    sel.title = "Tipo de filtro";
     const inp = document.createElement("input");
     inp.placeholder = "filtrar";
-    inp.oninput = () => { filtrosCol[c] = sinAcentos(inp.value); pagina = 1; aplicar(); };
-    thf.appendChild(inp);
+    const actualizar = () => {
+      filtrosCol[c] = { op: sel.value, val: inp.value.trim() };
+      pagina = 1; aplicar();
+    };
+    sel.onchange = actualizar;
+    inp.oninput = actualizar;
+    caja.append(sel, inp);
+    thf.appendChild(caja);
     tr2.appendChild(thf);
   });
   $("thead").replaceChildren(tr1, tr2);
+}
+
+const OPERADORES = [
+  ["contiene", "∋", "Contiene"],
+  ["=",  "=", "Igual a"],
+  ["!=", "≠", "Diferente de"],
+  [">",  ">", "Mayor que"],
+  [">=", "≥", "Igual o mayor que"],
+  ["<",  "<", "Menor que"],
+  ["<=", "≤", "Igual o menor que"],
+];
+
+// Compara números como números; si no, compara texto (sin acentos ni mayúsculas)
+function comparar(a, b) {
+  if (esNumero(a) && esNumero(b)) return aNumero(a) - aNumero(b);
+  return sinAcentos(a).localeCompare(sinAcentos(b), "es", { numeric: true });
+}
+
+function pasaFiltro(valor, filtro) {
+  if (!filtro || filtro.val === "") return true;
+  const { op, val } = filtro;
+  if (op === "contiene") return sinAcentos(valor).includes(sinAcentos(val));
+  if (String(valor ?? "").trim() === "") return op === "!=";   // celdas vacías no pasan comparaciones
+  if (esNumero(val) && !esNumero(valor)) return op === "!=";   // filtro numérico: ignora celdas de texto
+  const d = comparar(valor, val);
+  switch (op) {
+    case "=":  return d === 0;
+    case "!=": return d !== 0;
+    case ">":  return d > 0;
+    case ">=": return d >= 0;
+    case "<":  return d < 0;
+    case "<=": return d <= 0;
+  }
+  return true;
 }
 
 function aplicar() {
   const q = sinAcentos($("busqueda").value);
   filtradas = filas.filter(f =>
     (!q || columnas.some(c => sinAcentos(f[c]).includes(q))) &&
-    columnas.every(c => !filtrosCol[c] || sinAcentos(f[c]).includes(filtrosCol[c]))
+    columnas.every(c => pasaFiltro(f[c], filtrosCol[c]))
   );
   if (orden.col) {
     const c = orden.col, s = orden.asc ? 1 : -1;
@@ -162,6 +212,7 @@ $("next").onclick = () => { pagina++; pintar(); };
 $("limpiar").onclick = () => {
   $("busqueda").value = "";
   document.querySelectorAll("tr.filters input").forEach(i => i.value = "");
+  document.querySelectorAll("tr.filters select").forEach(s => s.value = "contiene");
   Object.keys(filtrosCol).forEach(k => delete filtrosCol[k]);
   orden = { col: null, asc: true }; pagina = 1; aplicar();
 };
