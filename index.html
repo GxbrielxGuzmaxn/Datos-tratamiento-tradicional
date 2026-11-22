@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Base de datos del proyecto</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --text:#1f2328; --muted:#6b7280; --line:#e5e7eb; --accent:#0f766e; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:28px 24px 8px; max-width:1200px; margin:auto; }
+  h1 { margin:0 0 4px; font-size:1.6rem; }
+  .sub { color:var(--muted); margin:0; }
+  main { max-width:1200px; margin:auto; padding:16px 24px 40px; }
+  .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
+  input[type=search], select { padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:.95rem; background:#fff; }
+  input[type=search] { flex:1; min-width:220px; }
+  button { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; font-size:.9rem; }
+  button.sec { background:#fff; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.4; cursor:default; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.9rem; }
+  th, td { padding:8px 12px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+  th { position:sticky; top:0; background:#fafafa; cursor:pointer; user-select:none; }
+  th .arrow { color:var(--muted); font-size:.75rem; }
+  tr.filters th { cursor:default; padding:4px 8px; }
+  tr.filters input { width:100%; min-width:80px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:.8rem; }
+  tbody tr:hover { background:#f0fdfa; }
+  td.num { text-align:right; font-variant-numeric: tabular-nums; }
+  .footer { display:flex; justify-content:space-between; align-items:center; margin-top:12px; color:var(--muted); font-size:.9rem; flex-wrap:wrap; gap:10px; }
+  .pager { display:flex; gap:6px; align-items:center; }
+  #fallback { display:none; padding:20px; background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Base de datos del proyecto</h1>
+  <p class="sub" id="resumen">Cargando datos…</p>
+</header>
+<main>
+  <div id="fallback">
+    No se pudo cargar <code>datos.csv</code> automáticamente (pasa al abrir el archivo directo en tu computadora).
+    Selecciónalo aquí para probar: <input type="file" id="archivo" accept=".csv">
+  </div>
+
+  <div class="toolbar">
+    <input type="search" id="busqueda" placeholder="Buscar en todas las columnas…">
+    <select id="porPagina">
+      <option>10</option><option selected>25</option><option>50</option><option>100</option>
+    </select>
+    <button class="sec" id="limpiar">Limpiar filtros</button>
+    <button id="descargar">Descargar resultados (CSV)</button>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead id="thead"></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    <span id="conteo"></span>
+    <div class="pager">
+      <button class="sec" id="prev">‹ Anterior</button>
+      <span id="pagina"></span>
+      <button class="sec" id="next">Siguiente ›</button>
+    </div>
+  </div>
+</main>
+
+<script>
+const ARCHIVO = "datos.csv";   // nombre del CSV en el repositorio
+
+let columnas = [], filas = [], filtradas = [];
+let orden = { col: null, asc: true };
+let pagina = 1;
+const filtrosCol = {};
+const $ = id => document.getElementById(id);
+
+function esNumero(v) { return v !== "" && v !== null && !isNaN(Number(String(v).replace(",", "."))); }
+function aNumero(v) { return Number(String(v).replace(",", ".")); }
+function sinAcentos(s) { return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+
+function cargar(resultado) {
+  columnas = resultado.meta.fields.filter(c => c && c.trim() !== "");
+  filas = resultado.data.filter(f => columnas.some(c => String(f[c] ?? "").trim() !== ""));
+  $("resumen").textContent = `${filas.length} registros · ${columnas.length} variables`;
+  construirEncabezado();
+  aplicar();
+}
+
+function construirEncabezado() {
+  const tr1 = document.createElement("tr");
+  const tr2 = document.createElement("tr"); tr2.className = "filters";
+  columnas.forEach(c => {
+    const th = document.createElement("th");
+    th.innerHTML = `${c} <span class="arrow"></span>`;
+    th.onclick = () => {
+      orden = { col: c, asc: orden.col === c ? !orden.asc : true };
+      aplicar();
+    };
+    tr1.appendChild(th);
+    const thf = document.createElement("th");
+    const inp = document.createElement("input");
+    inp.placeholder = "filtrar";
+    inp.oninput = () => { filtrosCol[c] = sinAcentos(inp.value); pagina = 1; aplicar(); };
+    thf.appendChild(inp);
+    tr2.appendChild(thf);
+  });
+  $("thead").replaceChildren(tr1, tr2);
+}
+
+function aplicar() {
+  const q = sinAcentos($("busqueda").value);
+  filtradas = filas.filter(f =>
+    (!q || columnas.some(c => sinAcentos(f[c]).includes(q))) &&
+    columnas.every(c => !filtrosCol[c] || sinAcentos(f[c]).includes(filtrosCol[c]))
+  );
+  if (orden.col) {
+    const c = orden.col, s = orden.asc ? 1 : -1;
+    filtradas.sort((a, b) => {
+      const x = a[c], y = b[c];
+      if (esNumero(x) && esNumero(y)) return (aNumero(x) - aNumero(y)) * s;
+      return String(x ?? "").localeCompare(String(y ?? ""), "es", { numeric: true }) * s;
+    });
+  }
+  document.querySelectorAll("#thead tr:first-child th").forEach((th, i) => {
+    th.querySelector(".arrow").textContent = columnas[i] === orden.col ? (orden.asc ? "▲" : "▼") : "";
+  });
+  pintar();
+}
+
+function pintar() {
+  const n = Number($("porPagina").value);
+  const total = Math.max(1, Math.ceil(filtradas.length / n));
+  pagina = Math.min(pagina, total);
+  const trozo = filtradas.slice((pagina - 1) * n, pagina * n);
+  const frag = document.createDocumentFragment();
+  trozo.forEach(f => {
+    const tr = document.createElement("tr");
+    columnas.forEach(c => {
+      const td = document.createElement("td");
+      td.textContent = f[c] ?? "";
+      if (esNumero(f[c])) td.className = "num";
+      tr.appendChild(td);
+    });
+    frag.appendChild(tr);
+  });
+  $("tbody").replaceChildren(frag);
+  $("conteo").textContent = `Mostrando ${trozo.length} de ${filtradas.length} registros filtrados (${filas.length} en total)`;
+  $("pagina").textContent = `Página ${pagina} de ${total}`;
+  $("prev").disabled = pagina <= 1;
+  $("next").disabled = pagina >= total;
+}
+
+$("busqueda").oninput = () => { pagina = 1; aplicar(); };
+$("porPagina").onchange = () => { pagina = 1; pintar(); };
+$("prev").onclick = () => { pagina--; pintar(); };
+$("next").onclick = () => { pagina++; pintar(); };
+$("limpiar").onclick = () => {
+  $("busqueda").value = "";
+  document.querySelectorAll("tr.filters input").forEach(i => i.value = "");
+  Object.keys(filtrosCol).forEach(k => delete filtrosCol[k]);
+  orden = { col: null, asc: true }; pagina = 1; aplicar();
+};
+$("descargar").onclick = () => {
+  const csv = Papa.unparse(filtradas, { columns: columnas });
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "resultados_filtrados.csv"; a.click();
+};
+
+const opciones = { header: true, skipEmptyLines: true, complete: cargar };
+Papa.parse(ARCHIVO, {
+  ...opciones, download: true,
+  error: () => {
+    $("resumen").textContent = "No se encontró datos.csv";
+    $("fallback").style.display = "block";
+  }
+});
+$("archivo").onchange = e => {
+  if (e.target.files[0]) { $("fallback").style.display = "none"; Papa.parse(e.target.files[0], opciones); }
+};
+</script>
+</body>
+</html>
